@@ -11,51 +11,49 @@ function attachRoomSockets(io) {
   io.on("connection", (socket) => {
     console.log("Socket connected:", socket.id);
 
-    socket.on("join-room", async (payload = {}) => {
-      try {
-        const roomId = String(payload.room || "default");
-        const options = {
-          size: payload.size,
-          winLen: payload.winLen,
-          name: payload.name || null,
-        };
 
-        // Add player (may throw if full)
-        const { symbol, room } = await roomsController.addPlayerToRoom(roomId, socket.id, options);
+socket.on("join-room", async (payload = {}, ack) => {
+  try {
+    const roomId = String(payload.room || "default");
+    const options = {
+      size: payload.size,
+      winLen: payload.winLen,
+      name: payload.name || null,
+    };
 
-        // Track mapping
-        socketRoomMap.set(socket.id, roomId);
-        socket.join(roomId);
+    const { symbol, room } = await roomsController.addPlayerToRoom(roomId, socket.id, options);
 
-        // Send joined ack with players array and scores
-        socket.emit("joined", {
-          room: room.id,
-          symbol,
-          board: room.board,
-          xTurn: room.xTurn,
-          size: room.size,
-          winLen: room.winLen,
-          players: room.players,
-          scores: room.scores,
-          creatorId: room.creatorId,
-        });
+    socketRoomMap.set(socket.id, roomId);
+    socket.join(roomId);
 
-        // send chat history only to this socket (server-side persisted messages while room alive)
-        const history = await roomsController.getMessages(roomId);
-        socket.emit("chat-history", history || []);
+    const joinedPayload = {
+      room: room.id,
+      symbol,
+      board: room.board,
+      xTurn: room.xTurn,
+      size: room.size,
+      winLen: room.winLen,
+      players: room.players,
+      scores: room.scores,
+      creatorId: room.creatorId,
+    };
 
-        // Notify others - include name if provided so they can update UI
-        socket.to(roomId).emit("player-joined", { id: socket.id, symbol, name: options.name || null });
+    if (typeof ack === "function") ack({ ok: true, data: joinedPayload });
+    socket.emit("joined", joinedPayload);
 
-        // announce updated players+scores to everyone in room
-        io.in(roomId).emit("players-updated", { players: room.players, scores: room.scores, creatorId: room.creatorId });
+    const history = await roomsController.getMessages(roomId);
+    if (history && history.length) socket.emit("chat-history", history);
 
-        console.log(`Socket ${socket.id} joined room ${roomId} as ${symbol}`);
-      } catch (err) {
-        console.warn("join-room error for socket", socket.id, err);
-        socket.emit("join-error", { message: err.message || "Failed to join room" });
-      }
-    });
+    socket.to(roomId).emit("player-joined", { id: socket.id, symbol, name: options.name || null });
+    io.in(roomId).emit("players-updated", { players: room.players, scores: room.scores, creatorId: room.creatorId });
+
+    console.log(`Socket ${socket.id} joined room ${roomId} as ${symbol}`);
+  } catch (err) {
+    console.warn("join-room error for socket", socket.id, err);
+    if (typeof ack === "function") ack({ ok: false, error: err.message || "Failed to join" });
+    socket.emit("join-error", { message: err.message || "Failed to join room" });
+  }
+});
 
     socket.on("move", async (payload = {}) => {
       try {

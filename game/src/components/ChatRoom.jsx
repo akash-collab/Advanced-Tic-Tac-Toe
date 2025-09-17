@@ -16,11 +16,39 @@ export default function SecretRose({ onClose, roomId }) {
   useEffect(() => {
     if (!roomId) return;
 
-    const socket = io(BACKEND_URL, { transports: ["websocket"] });
-    socketRef.current = socket;
+  // allow polling fallback and enable diagnostics
+  const socket = io(BACKEND_URL, {
+    transports: ["websocket", "polling"],
+    autoConnect: true,
+  });
+  socketRef.current = socket;
 
-    // join room with name
-    socket.emit("join-room", { room: roomId, name: user?.name || "Player" });
+  // debug logs
+  socket.on("connect", () => {
+    console.log("Socket connected", socket.id);
+    // emit join only when connected, with an ACK callback
+    socket.emit("join-room", { room: roomId, name: user?.name || "Player" }, (res) => {
+      if (!res) {
+        console.warn("No ack received for join-room");
+        return;
+      }
+      if (!res.ok) {
+        console.warn("Join failed (ack):", res.error);
+        alert("Failed to join room: " + (res.error || "unknown"));
+        return;
+      }
+      // optional: you can process res.data (joined payload)
+      console.log("Join succeeded:", res.data);
+    });
+  });
+
+  socket.on("connect_error", (err) => {
+    console.error("Socket connect_error:", err);
+  });
+
+  socket.on("disconnect", (reason) => {
+    console.log("Socket disconnected:", reason);
+  });
 
     // initial chat history
     socket.on("chat-history", (history = []) => {
@@ -51,8 +79,7 @@ export default function SecretRose({ onClose, roomId }) {
     });
 
     socket.on("joined", (payload) => {
-      // optional: show system notice
-      // console.log("joined ack", payload);
+      { console.log("joined event", payload); }
     });
 
     // errors

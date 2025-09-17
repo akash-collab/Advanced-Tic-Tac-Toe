@@ -1,94 +1,49 @@
-// controllers/roomsController.js
+// src/controllers/roomsController.js
 const roomModel = require("../models/roomModel");
 
 /**
- * Get room data for HTTP or socket responses.
- * Returns a sanitized copy (no internal sockets map keys).
- * @param {string} roomId
- * @returns {Object|null}
+ * Helper: server-side winner check (same logic as client)
  */
-async function getRoom(roomId) {
-  const room = roomModel.getRoom(roomId);
-  if (!room) return null;
+function checkWinner(board, size, winLen) {
+  const idx = (r, c) => r * size + c;
+  const dirs = [
+    [0, 1],
+    [1, 0],
+    [1, 1],
+    [-1, 1],
+  ];
 
-  return sanitizeRoom(room);
+  for (let r = 0; r < size; r++) {
+    for (let c = 0; c < size; c++) {
+      const start = board[idx(r, c)];
+      if (!start) continue;
+      for (const [dr, dc] of dirs) {
+        const line = [{ r, c }];
+        let rr = r,
+          cc = c;
+        for (let k = 1; k < winLen; k++) {
+          rr += dr;
+          cc += dc;
+          if (rr < 0 || rr >= size || cc < 0 || cc >= size) break;
+          if (board[idx(rr, cc)] === start) {
+            line.push({ r: rr, c: cc });
+          } else break;
+        }
+        if (line.length === winLen) {
+          return { winner: start, line };
+        }
+      }
+    }
+  }
+
+  if (board.every(Boolean)) {
+    return { winner: "draw", line: null };
+  }
+  return { winner: null, line: null };
 }
 
 /**
- * Create a room with options or return existing.
- * @param {string} roomId
- * @param {Object} options - { size, winLen }
- * @returns {Object} room
- */
-async function createOrGetRoom(roomId, options = {}) {
-  const room = roomModel.createRoom(roomId, options);
-  return sanitizeRoom(room);
-}
-
-/**
- * Add a player (socket) to a room and return assigned symbol and room snapshot.
- * Throws on error (e.g. room full).
- * @param {string} roomId
- * @param {string} socketId
- * @param {Object} options - optional { size, winLen } used when creating room
- * @returns {{ symbol: string, room: Object }}
- */
-async function addPlayerToRoom(roomId, socketId, options = {}) {
-  // ensure room exists
-  roomModel.createRoom(roomId, options);
-  const symbol = roomModel.addPlayer(roomId, socketId);
-  const room = roomModel.getRoom(roomId);
-  return { symbol, room: sanitizeRoom(room) };
-}
-
-/**
- * Apply a move in the room.
- * Throws on validation errors from the model.
- * Returns updated sanitized room.
- * @param {string} roomId
- * @param {number} index
- * @param {"X"|"O"} symbol
- * @returns {Object} room
- */
-async function applyMove(roomId, index, symbol) {
-  const updated = roomModel.applyMove(roomId, index, symbol);
-  return sanitizeRoom(updated);
-}
-
-/**
- * Reset a room board.
- * @param {string} roomId
- * @returns {Object} room
- */
-async function resetRoom(roomId) {
-  const r = roomModel.resetRoom(roomId);
-  return sanitizeRoom(r);
-}
-
-/**
- * Remove a player from a room and cleanup empty room.
- * @param {string} roomId
- * @param {string} socketId
- */
-async function removePlayer(roomId, socketId) {
-  roomModel.removePlayer(roomId, socketId);
-  roomModel.cleanupEmptyRoom(roomId);
-  const room = roomModel.getRoom(roomId);
-  return room ? sanitizeRoom(room) : null;
-}
-
-/**
- * List all rooms (summary view)
- * @returns {Array<Object>}
- */
-async function listRooms() {
-  return roomModel.listRooms();
-}
-
-/* ---------------------- Helpers ---------------------- */
-
-/**
- * Remove sensitive/internal details and return a shallow copy suitable for clients.
+ * Sanitize room for client consumption
  */
 function sanitizeRoom(room) {
   if (!room) return null;
@@ -97,9 +52,78 @@ function sanitizeRoom(room) {
     size: room.size,
     winLen: room.winLen,
     board: room.board.slice(),
-    players: Object.values(room.players), // returns array like ["X","O"]
+    players: Object.values(room.players).map((p) => ({ socketId: p.socketId, symbol: p.symbol, name: p.name })),
     xTurn: room.xTurn,
+    creatorId: room.creatorId || null,
+    lastStarter: room.lastStarter || null,
+    scores: Object.assign({}, room.scores || { X: 0, O: 0 }),
   };
+}
+
+/* ---------------------- Controller API ---------------------- */
+
+async function getRoom(roomId) {
+  const room = roomModel.getRoom(roomId);
+  if (!room) return null;
+  return sanitizeRoom(room);
+}
+
+async function createOrGetRoom(roomId, options = {}) {
+  const room = roomModel.createRoom(roomId, options);
+  return sanitizeRoom(room);
+}
+
+/**
+ * Add a player and return symbol + room snapshot
+ */
+async function addPlayerToRoom(roomId, socketId, options = {}) {
+  roomModel.createRoom(roomId, options);
+  const entry = roomModel.addPlayer(roomId, socketId, options.name || null);
+  const room = roomModel.getRoom(roomId);
+  return { symbol: entry.symbol, room: sanitizeRoom(room) };
+}
+
+/**
+ * Apply a move: validate + apply, then compute winner. If winner X/O -> increment score.
+ *
+ * Returns: { room: sanitizedRoom, winner: "X"|"O"|"draw"|null, line: Array|null }
+ */
+async function applyMove(roomId, socketId, index, symbol) {
+  const updated = roomModel.applyMove(roomId, socketId, index, symbol);
+  // compute winner
+  const result = checkWinner(updated.board, updated.size, updated.winLen);
+  if (result.winner === "X" || result.winner === "O") {
+    // increment score for winner
+    roomModel.incrementScore(roomId, result.winner);
+  }
+  const room = roomModel.getRoom(roomId);
+  return { room: sanitizeRoom(room), winner: result.winner, line: result.line };
+}
+
+/**
+ * Reset a room board (keeps scores)
+ */
+async function resetRoom(roomId) {
+  const r = roomModel.resetRoom(roomId);
+  return sanitizeRoom(r);
+}
+
+async function removePlayer(roomId, socketId) {
+  roomModel.removePlayer(roomId, socketId);
+  roomModel.cleanupEmptyRoom(roomId);
+  const room = roomModel.getRoom(roomId);
+  return room ? sanitizeRoom(room) : null;
+}
+
+async function listRooms() {
+  return roomModel.listRooms();
+}
+
+async function addMessage(roomId, msg) {
+  return roomModel.addMessage(roomId, msg);
+}
+async function getMessages(roomId) {
+  return roomModel.getMessages(roomId);
 }
 
 /* ---------------------- Exports ---------------------- */
@@ -112,4 +136,6 @@ module.exports = {
   resetRoom,
   removePlayer,
   listRooms,
+  addMessage,
+  getMessages,
 };

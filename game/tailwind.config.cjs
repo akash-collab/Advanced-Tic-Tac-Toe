@@ -4,6 +4,7 @@ module.exports = {
     "./index.html",
     "./src/**/*.{js,jsx,ts,tsx}"
   ],
+  darkMode:"class",
   theme: {
     extend: {
       fontFamily: {
@@ -21,10 +22,12 @@ module.exports = {
           700: "#b92b63",
           800: "#8a1f48",
           900: "#5f1530",
+          roseAccent: { DEFAULT: "#fb7185" },
+          skyAccent: { DEFAULT: "#60a5fa" },
         },
       },
       boxShadow: {
-        soft: "0 6px 18px rgba(15, 23, 42, 0.08)",
+        'soft': '0 8px 20px rgba(2,6,23,0.6)',
         glow: "0 8px 30px rgba(255, 79, 155, 0.12)",
       },
       borderRadius: {

@@ -1,6 +1,8 @@
-import React from "react";
+// src/components/Controls.jsx
+import React, { useContext } from "react";
 import { motion } from "framer-motion";
 import clsx from "clsx";
+import { AuthContext } from "../context/AuthContext";
 
 /**
  * Controls.jsx
@@ -19,6 +21,9 @@ import clsx from "clsx";
  * - setRoomId (fn)
  * - onConnect (fn)  // invoked when user clicks "Connect"
  * - statusMsg (string)
+ *
+ * Behavior change:
+ * - Online Mode toggle + Connect input/button are disabled for unauthenticated users.
  */
 
 export default function Controls({
@@ -35,9 +40,23 @@ export default function Controls({
   setRoomId,
   onConnect,
   statusMsg,
+  isCreator = false,
 }) {
+  const { user } = useContext(AuthContext);
+  const loggedIn = Boolean(user && user.token);
+
+  // When user tries to toggle multiplayer on while not logged in, show an alert
+  function handleToggleMultiplayer(checked) {
+    if (checked && !loggedIn) {
+      // polite UX: quick alert — you can replace with a nicer toast
+      alert("You must be logged in to use Online Mode.");
+      return;
+    }
+    setMultiplayerMode(checked);
+  }
+
   return (
-    <section className="mb-4 grid gap-3 grid-cols-1 sm:grid-cols-2 items-center">
+    <section className="mb-4 grid gap-3 grid-cols-1 sm:grid-cols-2 items-center bg-card p-3 rounded-xl shadow-soft">
       <motion.div
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0 }}
@@ -83,17 +102,23 @@ export default function Controls({
         transition={{ duration: 0.36 }}
         className="flex gap-2 justify-end items-center"
       >
-        <div className="text-sm text-slate-600 mr-2 hidden sm:block">{statusMsg}</div>
+        <div className="text-sm text-muted mr-2 hidden sm:block">{statusMsg}</div>
 
         <button
           onClick={newGame}
-          className="px-3 py-2 bg-rose-500 text-white rounded-lg shadow-soft hover:bg-rose-600 transition"
-          title="Start a new game"
+          className={clsx(
+            "px-4 py-2 rounded-lg",
+            multiplayerMode
+              ? (isCreator ? "btn-primary" : "bg-slate-700 text-slate-400 cursor-not-allowed")
+              : "btn-primary"
+          )}
+          title={multiplayerMode ? (isCreator ? "Start a new game" : "Only room creator can start a new game") : "Start a new game"}
+          disabled={multiplayerMode && !isCreator}
         >
           New Game
         </button>
 
-        <button
+        {/* <button
           onClick={undo}
           disabled={!canUndo}
           className={clsx(
@@ -103,45 +128,57 @@ export default function Controls({
           title="Undo last move"
         >
           Undo
-        </button>
+        </button> */}
       </motion.div>
 
       {/* Multiplayer row */}
       <div className="sm:col-span-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-sm">
+          <label className="flex items-center gap-2 justify-end">
             <input
               type="checkbox"
               checked={multiplayerMode}
-              onChange={(e) => setMultiplayerMode(e.target.checked)}
+              onChange={(e) => handleToggleMultiplayer(e.target.checked)}
               className="w-4 h-4"
             />
             <span>Online Mode</span>
           </label>
 
-          <div className="text-xs text-slate-500">Enable to connect to a Socket.IO server (optional)</div>
         </div>
 
-        {multiplayerMode && (
-          <div className="flex gap-2 items-center justify-end">
-            <input
-              placeholder="room id (optional)"
-              value={roomId}
-              onChange={(e) => setRoomId(e.target.value)}
-              className="px-2 py-1 rounded-lg border text-sm focus:outline-none"
-            />
-            <button
-              onClick={() => onConnect && onConnect(roomId)}
-              className="px-3 py-1 bg-sky-600 text-white rounded-lg text-sm"
-            >
-              Connect
-            </button>
-          </div>
-        )}
+        {/* If user is not logged in, disable connect controls and show hint */}
+        <div className="flex gap-2 items-center justify-end">
+          <input
+            placeholder={loggedIn ? "room id (optional)" : "Login to use online mode"} value={roomId}
+            onChange={(e) => setRoomId(e.target.value)}
+            className={clsx(
+              "px-3 py-2 rounded-lg border bg-transparent text-sm",
+              !loggedIn ? "bg-slate-800 text-slate-500 cursor-not-allowed" : ""
+            )}
+            disabled={!loggedIn || !multiplayerMode}
+          />
+          <button
+            onClick={() => {
+              if (!loggedIn) {
+                alert("Please login to connect to online rooms.");
+                return;
+              }
+              if (!multiplayerMode) {
+                alert("Enable Online Mode first.");
+                return;
+              }
+              onConnect && onConnect(roomId);
+            }}
+            className={clsx("px-4 py-2 rounded-lg text-sm", loggedIn && multiplayerMode ? "bg-sky-600 text-white" : "bg-slate-700 text-slate-400 cursor-not-allowed")}
+            disabled={!loggedIn || !multiplayerMode}
+          >
+            Connect
+          </button>
+        </div>
       </div>
 
       {/* Mobile status */}
-      <div className="sm:col-span-2 block sm:hidden mt-1 text-sm text-slate-600">{statusMsg}</div>
+      <div className="sm:col-span-2 block sm:hidden mt-1 text-sm text-muted">{statusMsg}</div>
     </section>
   );
 }

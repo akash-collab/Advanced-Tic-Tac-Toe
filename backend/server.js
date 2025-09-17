@@ -4,7 +4,16 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const routes = require("./src/routes/index");
 const attachRoomSockets = require("./src/sockets/roomsSocket");
+const authRoutes = require("./src/routes/authRoutes");
+const uploadRoutes = require("./src/routes/uploadRoutes");
 
+const dotenv = require("dotenv");
+const connectDB = require("./src/config/db");
+
+const mongoose = require("mongoose");
+
+dotenv.config();
+connectDB();
 
 const app = express();
 app.use(cors());
@@ -12,6 +21,8 @@ app.use(express.json());
 
 // HTTP routes (health checks, optional REST endpoints)
 app.use("/", routes);
+app.use("/api/auth", authRoutes);
+app.use("/api/upload", uploadRoutes);
 
 // Create HTTP server and attach Socket.IO
 const server = http.createServer(app);

@@ -1,23 +1,17 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
+// src/components/Gameboard.jsx
+import React, { useEffect, useMemo, useState, useRef, useContext } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { io as ioClient } from "socket.io-client";
 import clsx from "clsx";
 
+import Leaderboard from "./Leaderboard";
 import GameCell from "./GameCell";
 import Controls from "./Controls";
 import BACKEND_URL from "../config";
+import { AuthContext } from "../context/AuthContext";
+import SecretRose from "./ChatRoom";
 
-/**
- * GameBoard.jsx
- *
- * - Dynamic NxN board (3..10)
- * - Configurable win length (3..N)
- * - Local 2-player play on same device
- * - Optional online multiplayer using Socket.IO (client-side wiring included)
- * - Animated cells + win highlight
- */
-
-/* ---------------------- Helper utilities ---------------------- */
+/* ---------------------- Helper: winner detection ---------------------- */
 
 function checkWinner(board, size, winLen) {
   const idx = (r, c) => r * size + c;
@@ -52,22 +46,23 @@ function checkWinner(board, size, winLen) {
     }
   }
 
-  if (board.every(Boolean)) {
-    return { winner: "draw", line: null };
-  }
+  if (board.every(Boolean)) return { winner: "draw", line: null };
   return { winner: null, line: null };
 }
 
-/* ---------------------- Main GameBoard ---------------------- */
+/* ---------------------- Component ---------------------- */
 
 export default function GameBoard() {
+  const { user } = useContext(AuthContext);
+
+  // core local state
   const [size, setSize] = useState(3);
   const [winLen, setWinLen] = useState(3);
   const [board, setBoard] = useState(Array(9).fill(null));
   const [xTurn, setXTurn] = useState(true);
   const [history, setHistory] = useState([]);
-  const [statusMsg, setStatusMsg] = useState("X to move");
   const [winnerInfo, setWinnerInfo] = useState({ winner: null, line: null });
+  const [statusMsg, setStatusMsg] = useState("X to move");
 
   // multiplayer state
   const [multiplayerMode, setMultiplayerMode] = useState(false);
@@ -76,8 +71,18 @@ export default function GameBoard() {
   const [connectedRoom, setConnectedRoom] = useState(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const [playerSymbol, setPlayerSymbol] = useState(null);
+  const [playerNames, setPlayerNames] = useState({ X: null, O: null });
+  const [scores, setScores] = useState({ X: 0, O: 0 });
+  const [roomCreatorId, setRoomCreatorId] = useState(null);
+  const [isCreator, setIsCreator] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
 
-  // initialize board when size changes
+  // layout refs + responsive board sizing
+  const controlsRef = useRef(null);
+  const [boardPx, setBoardPx] = useState(null);
+
+  /* ---------------------- Initialize / reset when size changes ---------------------- */
+
   useEffect(() => {
     const len = size * size;
     setBoard(Array(len).fill(null));
@@ -86,37 +91,77 @@ export default function GameBoard() {
     setWinnerInfo({ winner: null, line: null });
     setStatusMsg("X to move");
     setWinLen((prev) => Math.min(Math.max(prev, 3), size));
-    // disconnect any existing socket connection when changing board size? no — keep connection
   }, [size]);
 
-  // recompute winner when board or winLen changes
+  /* ---------------------- Winner detection ---------------------- */
+
   useEffect(() => {
     const w = checkWinner(board, size, winLen);
     setWinnerInfo(w);
+
     if (w.winner === "X") setStatusMsg("🎉 X wins!");
     else if (w.winner === "O") setStatusMsg("🎉 O wins!");
     else if (w.winner === "draw") setStatusMsg("It's a draw");
     else setStatusMsg(xTurn ? "X to move" : "O to move");
   }, [board, size, winLen, xTurn]);
 
-  // Clean up socket on unmount
+  /* ---------------------- Responsive board sizing & no-scroll on mobile ---------------------- */
+
+  function computeBoardSize() {
+    try {
+      const vh = window.innerHeight;
+      const vw = window.innerWidth;
+
+      // measure header/footer if any
+      const header = document.querySelector("header");
+      const footer = document.querySelector("footer");
+      const headerH = header ? header.getBoundingClientRect().height : 0;
+      const footerH = footer ? footer.getBoundingClientRect().height : 0;
+
+      // controls available space (estimated)
+      const controlsEl = controlsRef.current;
+      const controlsH = controlsEl ? controlsEl.getBoundingClientRect().height : 0;
+
+      // breathing room so buttons / leaderboard still visible
+      const verticalPadding = 28;
+      const availableHeight = Math.max(120, vh - headerH - controlsH - footerH - verticalPadding);
+
+      // width constraints with side paddings
+      const horizontalPadding = 48;
+      const maxWidthAvailable = Math.max(120, vw - horizontalPadding);
+
+      // choose the limiting dimension and cap to a comfortable max (900px)
+      const sizePx = Math.floor(Math.min(availableHeight, maxWidthAvailable, 900));
+      setBoardPx(sizePx);
+    } catch (e) {
+      setBoardPx(Math.min(window.innerWidth - 48, 480));
+    }
+  }
+
   useEffect(() => {
-    return () => {
-      if (socketRef.current) {
-        try {
-          socketRef.current.disconnect();
-        } catch (e) { }
-        socketRef.current = null;
-      }
-    };
+    // if mobile, prevent body scroll so board fits fully on viewport
+    const smallScreen = typeof window !== "undefined" && window.innerWidth <= 640;
+    if (smallScreen) {
+      const prev = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+      computeBoardSize();
+      window.addEventListener("resize", computeBoardSize);
+      return () => {
+        document.body.style.overflow = prev || "";
+        window.removeEventListener("resize", computeBoardSize);
+      };
+    } else {
+      computeBoardSize();
+      window.addEventListener("resize", computeBoardSize);
+      return () => {
+        window.removeEventListener("resize", computeBoardSize);
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------------------- Socket helpers ---------------------- */
+  /* ---------------------- Socket helpers (kept similar to your existing logic) ---------------------- */
 
-  /**
-   * initSocket - lazily create socket client if not present
-   * Replace 'http://localhost:5050' with your server URL in production.
-   */
   function initSocket() {
     if (socketRef.current && socketRef.current.connected) return socketRef.current;
 
@@ -126,37 +171,83 @@ export default function GameBoard() {
         transports: ["websocket", "polling"],
       });
 
-
-      // core handlers
       socketRef.current.on("connect", () => {
         setSocketConnected(true);
-        console.log("socket connected:", socketRef.current.id);
+        if (roomCreatorId) setIsCreator(roomCreatorId === socketRef.current.id);
       });
 
-      socketRef.current.on("disconnect", (reason) => {
+      socketRef.current.on("disconnect", () => {
         setSocketConnected(false);
-        console.log("socket disconnected:", reason);
         setConnectedRoom(null);
+        setPlayerSymbol(null);
       });
 
       socketRef.current.on("board-update", (payload) => {
-        // server should send { board, xTurn } or similar
-        if (payload?.board) {
-          setBoard(payload.board);
+        if (payload?.board) setBoard(payload.board);
+        if (typeof payload?.xTurn === "boolean") setXTurn(payload.xTurn);
+      });
+
+      socketRef.current.on("players-updated", (payload) => {
+        // payload: { players: [...], scores: { X, O }, creatorId }
+        if (payload?.players) {
+          const map = { X: null, O: null };
+          for (const p of payload.players) {
+            if (p && p.symbol) map[p.symbol] = p.name || null;
+          }
+          setPlayerNames(map);
         }
-        if (typeof payload?.xTurn === "boolean") {
-          setXTurn(payload.xTurn);
+        if (payload?.scores) setScores(payload.scores);
+        if (payload?.creatorId) {
+          setRoomCreatorId(payload.creatorId);
+          setIsCreator(payload.creatorId === (socketRef.current && socketRef.current.id));
+        }
+      });
+
+      socketRef.current.on("game-ended", (payload) => {
+        if (payload?.winner) setWinnerInfo({ winner: payload.winner, line: payload.line || null });
+        if (payload?.scores) setScores(payload.scores);
+        if (Array.isArray(payload?.players)) {
+          const map = { X: null, O: null };
+          for (const p of payload.players) {
+            if (p && p.symbol) map[p.symbol] = p.name || null;
+          }
+          setPlayerNames(map);
         }
       });
 
       socketRef.current.on("joined", (payload) => {
         setConnectedRoom(payload?.room || null);
-        setPlayerSymbol(payload?.symbol || null); // ✅ keep track of assigned symbol
-        alert(`Joined room: ${payload?.room || "unknown"} as ${payload?.symbol}`);
+        setPlayerSymbol(payload?.symbol || null);
+
+        if (Array.isArray(payload?.players)) {
+          const map = { X: null, O: null };
+          for (const p of payload.players) {
+            if (p && p.symbol) map[p.symbol] = p.name || null;
+          }
+          setPlayerNames(map);
+        }
         if (payload?.board) {
           setBoard(payload.board);
           setXTurn(typeof payload.xTurn === "boolean" ? payload.xTurn : true);
         }
+        if (payload?.scores) setScores(payload.scores);
+        if (payload?.creatorId) {
+          setRoomCreatorId(payload.creatorId);
+          setIsCreator(payload.creatorId === (socketRef.current && socketRef.current.id));
+        } else {
+          setRoomCreatorId(null);
+          setIsCreator(false);
+        }
+      });
+
+      socketRef.current.on("player-joined", (payload) => {
+        if (payload?.symbol) {
+          setPlayerNames((prev) => ({ ...prev, [payload.symbol]: payload.name || prev[payload.symbol] || null }));
+        }
+      });
+
+      socketRef.current.on("player-left", (payload) => {
+        // handled by players-updated where possible
       });
 
       socketRef.current.on("join-error", (payload) => {
@@ -172,39 +263,34 @@ export default function GameBoard() {
     return socketRef.current;
   }
 
-  /**
-   * connectToRoom - used as the onConnect prop for Controls
-   */
   function connectToRoom(room = "") {
     if (!multiplayerMode) {
       alert("Enable Online Mode toggle first to connect.");
       return;
     }
+    if (!user) {
+      alert("Please login before joining an online room.");
+      return;
+    }
+
     const socket = initSocket();
     if (!socket) {
       alert("Failed to create socket client.");
       return;
     }
-    if (!socket.connected) {
-      socket.open();
-    }
+    if (!socket.connected) socket.open();
 
-    // wait for connection and then emit join-room
-    if (socket.connected) {
-      socket.emit("join-room", { room });
-    } else {
-      // if not connected yet, listen for connect once, then join
+    const joinPayload = { room, name: user.name };
+    if (socket.connected) socket.emit("join-room", joinPayload);
+    else {
       const onConnectOnce = () => {
-        socket.emit("join-room", { room });
+        socket.emit("join-room", joinPayload);
         socket.off("connect", onConnectOnce);
       };
       socket.on("connect", onConnectOnce);
     }
   }
 
-  /**
-   * leaveRoom - disconnects from socket and leaves room
-   */
   function leaveRoom() {
     if (socketRef.current) {
       try {
@@ -217,6 +303,11 @@ export default function GameBoard() {
     }
     setConnectedRoom(null);
     setSocketConnected(false);
+    setPlayerSymbol(null);
+    setPlayerNames({ X: null, O: null });
+    setScores({ X: 0, O: 0 });
+    setRoomCreatorId(null);
+    setIsCreator(false);
     alert("Disconnected from room");
   }
 
@@ -233,12 +324,19 @@ export default function GameBoard() {
     if (board[index]) return;
 
     if (multiplayerMode) {
-      // Online mode → don’t update optimistically, let server confirm
-      socketRef.current.emit("move", { index, symbol: playerSymbol, room: connectedRoom || roomId });
+      if (!playerSymbol) {
+        alert("You are not assigned a symbol yet.");
+        return;
+      }
+      socketRef.current.emit("move", {
+        index,
+        symbol: playerSymbol,
+        room: connectedRoom || roomId,
+      });
       return;
     }
 
-    // Local play fallback
+    // local play
     setHistory((h) => [...h, board.slice()]);
     setBoard((prev) => {
       const copy = prev.slice();
@@ -248,13 +346,15 @@ export default function GameBoard() {
     setXTurn((v) => !v);
   }
 
-
   function newGame() {
     if (multiplayerMode && socketRef.current && socketRef.current.connected) {
+      if (!isCreator) {
+        alert("Only the room creator can start a new game.");
+        return;
+      }
       socketRef.current.emit("reset", { room: connectedRoom || roomId });
       return;
     }
-    // local mode
     setBoard(Array(size * size).fill(null));
     setHistory([]);
     setXTurn(true);
@@ -262,10 +362,8 @@ export default function GameBoard() {
     setStatusMsg("X to move");
   }
 
-
   function undo() {
     if (!history.length) return;
-    // Undo should be local only (server authoritative games probably shouldn't allow local undo)
     if (multiplayerMode && socketRef.current && socketRef.current.connected) {
       alert("Undo is disabled in online mode (server should handle state).");
       return;
@@ -284,99 +382,183 @@ export default function GameBoard() {
     return new Set(winnerInfo.line.map((p) => idx(p.r, p.c)));
   }, [winnerInfo, size]);
 
+  const symbolToName = (symbol) => {
+    if (!symbol || symbol === "draw") return null;
+    return playerNames[symbol] || null;
+  };
+
+  // dynamic board container style + precise cell size
+  const gapPx = 12;
+
+  // compute cellPx when boardPx is available
+  const cellPx = boardPx ? Math.floor((boardPx - gapPx * (size - 1)) / size) : null;
+
+  const boardContainerStyle = boardPx
+    ? {
+      // fix board outer dimension to boardPx (cells will be exact)
+      width: `${boardPx}px`,
+      margin: "0 auto",
+      display: "grid",
+      gridTemplateColumns: `repeat(${size}, ${cellPx}px)`,
+      gridAutoRows: `${cellPx}px`,
+      gap: `${gapPx}px`,
+      justifyContent: "center",
+      boxSizing: "border-box",
+    }
+    : {
+      display: "grid",
+      gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
+      gap: `${gapPx}px`,
+    };
+
+  const playersArr = [
+    { symbol: "X", name: playerNames.X },
+    { symbol: "O", name: playerNames.O },
+  ];
+
   /* ---------------------- Render ---------------------- */
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* Controls */}
-      <Controls
-        size={size}
-        setSize={(v) => {
-          // if changing size while connected online, warn
-          if (multiplayerMode && socketConnected) {
-            if (!confirm("Changing board size while connected will reset local board. Proceed?")) return;
-          }
-          setSize(v);
-        }}
-        winLen={winLen}
-        setWinLen={setWinLen}
-        newGame={newGame}
-        undo={undo}
-        canUndo={history.length > 0}
-        multiplayerMode={multiplayerMode}
-        setMultiplayerMode={(val) => {
-          // toggle multiplayer mode: if turning off, disconnect socket
-          if (!val) {
-            leaveRoom();
-          }
-          setMultiplayerMode(val);
-        }}
-        roomId={roomId}
-        setRoomId={setRoomId}
-        onConnect={(r) => connectToRoom(r)}
-        statusMsg={
-          multiplayerMode
-            ? socketConnected
-              ? `Online — room: ${connectedRoom || roomId}, you are ${playerSymbol || "?"}`
-              : "Online — not connected"
-            : statusMsg
-        }
-
-      />
-
-      {/* Board */}
-      <section
-        className="bg-gradient-to-br from-white to-rose-50 p-4 rounded-2xl shadow-glow"
-        aria-live="polite"
-      >
-        <div
-          className="grid gap-3"
-          style={{
-            gridTemplateColumns: `repeat(${size}, minmax(0, 1fr))`,
-          }}
-        >
-          {board.map((val, i) => (
-            <GameCell
-              key={i}
-              index={i}
-              value={val}
-              onClick={() => handleCellClick(i)}
-              isHighlighted={winningIndices.has(i)}
+    <div className="max-w-6xl mx-auto px-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+        {/* Main column: controls + board */}
+        <div className="lg:col-span-2 flex flex-col gap-4">
+          <div ref={controlsRef}>
+            <Controls
+              size={size}
+              setSize={(v) => {
+                if (multiplayerMode && socketConnected) {
+                  if (!confirm("Changing board size while connected will reset local board. Proceed?")) return;
+                }
+                setSize(v);
+              }}
+              winLen={winLen}
+              setWinLen={setWinLen}
+              newGame={newGame}
+              undo={undo}
+              canUndo={history.length > 0}
+              multiplayerMode={multiplayerMode}
+              setMultiplayerMode={(val) => {
+                if (!val) {
+                  leaveRoom();
+                }
+                setMultiplayerMode(val);
+              }}
+              roomId={roomId}
+              setRoomId={setRoomId}
+              onConnect={(r) => connectToRoom(r)}
+              statusMsg={
+                multiplayerMode
+                  ? socketConnected
+                    ? `Online — room: ${connectedRoom || roomId}, you are ${user?.name || "?"} (${playerSymbol || "?"})`
+                    : "Online — not connected"
+                  : statusMsg
+              }
+              isCreator={isCreator}
             />
-          ))}
+          </div>
+
+          <section className="bg-card p-4 rounded-2xl shadow-soft" aria-live="polite">
+            {/* Board: precise pixel grid to avoid overlap */}
+            <div style={boardContainerStyle}>
+              {board.map((val, i) => (
+                <GameCell
+                  key={i}
+                  index={i}
+                  value={val}
+                  onClick={() => handleCellClick(i)}
+                  isHighlighted={winningIndices.has(i)}
+                  cellPx={cellPx}
+                />
+              ))}
+            </div>
+
+            <AnimatePresence>
+              {winnerInfo.winner && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="mt-4 p-4 rounded-lg bg-card border border-transparent shadow-soft flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3"
+                >
+                  <div>
+                    {winnerInfo.winner === "draw" ? (
+                      <div className="text-lg font-semibold">It's a draw</div>
+                    ) : (
+                      <>
+                        <div className="text-lg font-semibold">
+                          {symbolToName(winnerInfo.winner) || winnerInfo.winner} wins!
+                        </div>
+                        {winnerInfo.winner && symbolToName(winnerInfo.winner) && (
+                          <div className="text-sm text-muted">
+                            Defeated:{" "}
+                            {symbolToName(winnerInfo.winner === "X" ? "O" : "X") ||
+                              (winnerInfo.winner === "X" ? "O" : "X")}
+                          </div>
+                        )}
+                        {scores && typeof scores[winnerInfo.winner] !== "undefined" && (
+                          <div className="text-sm text-muted mt-1">
+                            {symbolToName(winnerInfo.winner) || winnerInfo.winner} now has{" "}
+                            {scores[winnerInfo.winner]} point{scores[winnerInfo.winner] !== 1 ? "s" : ""}.
+                          </div>
+                        )}
+                      </>
+                    )}
+                    <div className="text-sm text-muted mt-1">Change board or start a new game.</div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={newGame} className="px-3 py-2 btn-primary rounded-lg">
+                      New Game
+                    </button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </section>
+
+          <section className="mt-4 text-sm text-muted">
+            Tip: Use a larger win length to make larger boards more interesting. For 3×3 standard rules, set win length to 3.
+          </section>
+        </div>
+        <div className="flex gap-2 items-center mt-2">
+          {multiplayerMode && connectedRoom ? (
+            <button
+              onClick={() => setShowSecret(true)}
+              className="px-3 py-2 rounded-lg bg-rose-500 text-white"
+            >
+              Open Secret Chat
+            </button>
+          ) : (
+            <div className="text-sm text-muted">Connect to an online room to open secret chat.</div>
+          )}
         </div>
 
-        {/* Overlay message when game finished */}
-        <AnimatePresence>
-          {winnerInfo.winner && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="mt-4 p-4 rounded-lg bg-white/90 border border-slate-100 shadow-soft flex items-center justify-between"
-            >
-              <div>
-                {winnerInfo.winner === "draw" ? (
-                  <div className="text-lg font-semibold">It's a draw</div>
-                ) : (
-                  <div className="text-lg font-semibold">{winnerInfo.winner} wins!</div>
-                )}
-                <div className="text-sm text-slate-500">Change board or start a new game.</div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={newGame} className="px-3 py-2 bg-rose-500 text-white rounded-lg">
-                  New Game
-                </button>
-              </div>
-            </motion.div>
+        {/* Right column: leaderboard */}
+        <aside className="hidden lg:block">
+          {multiplayerMode && connectedRoom ? (
+            <Leaderboard players={playersArr} scores={scores} highlightSymbol={playerSymbol} />
+          ) : (
+            <div className="bg-card p-4 rounded-xl shadow-soft text-sm text-muted">
+              Leaderboard will appear here when you connect to a room.
+            </div>
           )}
-        </AnimatePresence>
-      </section>
+        </aside>
+      </div>
 
-      {/* Tips */}
-      <section className="mt-4 text-sm text-slate-500">
-        Tip: Use a larger win length to make larger boards more interesting. For 3×3 standard rules, set win length to 3.
-      </section>
+      {/* Mobile leaderboard (under board) */}
+      {multiplayerMode && connectedRoom && (
+        <div className="mt-4 block lg:hidden">
+          <Leaderboard players={playersArr} scores={scores} highlightSymbol={playerSymbol} />
+        </div>
+      )}
+
+      {showSecret && connectedRoom && (
+        <div className="fixed inset-0 z-50 p-6">
+          <div className="max-w-4xl mx-auto">
+            <SecretRose roomId={connectedRoom || roomId} onClose={() => setShowSecret(false)} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

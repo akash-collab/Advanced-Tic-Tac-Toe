@@ -1,4 +1,4 @@
-// sockets/roomsSocket.js
+// src/sockets/roomsSocket.js
 const roomsController = require("../controllers/roomsController");
 
 /**
@@ -6,31 +6,28 @@ const roomsController = require("../controllers/roomsController");
  * @param {import('socket.io').Server} io
  */
 function attachRoomSockets(io) {
-  // map socketId -> roomId (helps with cleanup)
-  const socketRoomMap = new Map();
+  const socketRoomMap = new Map(); // socketId -> roomId
 
   io.on("connection", (socket) => {
     console.log("Socket connected:", socket.id);
 
-    /* ---------------------- join-room ---------------------- */
     socket.on("join-room", async (payload = {}) => {
       try {
         const roomId = String(payload.room || "default");
         const options = {
           size: payload.size,
           winLen: payload.winLen,
+          name: payload.name || null,
         };
 
-        // Try to add player to room via controller (may throw if full)
+        // Add player (may throw if full)
         const { symbol, room } = await roomsController.addPlayerToRoom(roomId, socket.id, options);
 
         // Track mapping
         socketRoomMap.set(socket.id, roomId);
-
-        // Join socket.io room
         socket.join(roomId);
 
-        // Acknowledge the joining socket with assigned symbol and current room state
+        // Send joined ack with players array and scores
         socket.emit("joined", {
           room: room.id,
           symbol,
@@ -38,10 +35,20 @@ function attachRoomSockets(io) {
           xTurn: room.xTurn,
           size: room.size,
           winLen: room.winLen,
+          players: room.players,
+          scores: room.scores,
+          creatorId: room.creatorId,
         });
 
-        // Notify other sockets in the room that a player joined
-        socket.to(roomId).emit("player-joined", { id: socket.id, symbol });
+        // send chat history only to this socket (server-side persisted messages while room alive)
+        const history = await roomsController.getMessages(roomId);
+        socket.emit("chat-history", history || []);
+
+        // Notify others - include name if provided so they can update UI
+        socket.to(roomId).emit("player-joined", { id: socket.id, symbol, name: options.name || null });
+
+        // announce updated players+scores to everyone in room
+        io.in(roomId).emit("players-updated", { players: room.players, scores: room.scores, creatorId: room.creatorId });
 
         console.log(`Socket ${socket.id} joined room ${roomId} as ${symbol}`);
       } catch (err) {
@@ -50,7 +57,6 @@ function attachRoomSockets(io) {
       }
     });
 
-    /* ---------------------- move ---------------------- */
     socket.on("move", async (payload = {}) => {
       try {
         const { room: roomId, index, symbol } = payload;
@@ -58,50 +64,100 @@ function attachRoomSockets(io) {
           socket.emit("error", { message: "Missing room id" });
           return;
         }
-        // Controller will validate and throw on invalid moves
-        const updatedRoom = await roomsController.applyMove(roomId, index, symbol);
+        // Controller will validate using socket.id
+        const { room: updatedRoom, winner, line } = await roomsController.applyMove(roomId, socket.id, index, symbol);
 
         // Broadcast updated board to everyone in the room
         io.in(roomId).emit("board-update", {
           board: updatedRoom.board,
           xTurn: updatedRoom.xTurn,
         });
+
+        // If a winner (X or O) or draw occurred, broadcast game-ended and players-updated (scores changed for X/O only)
+        if (winner) {
+          io.in(roomId).emit("game-ended", {
+            winner,
+            line,
+            scores: updatedRoom.scores,
+            players: updatedRoom.players,
+          });
+          // also emit players-updated for UI scoreboard
+          io.in(roomId).emit("players-updated", { players: updatedRoom.players, scores: updatedRoom.scores, creatorId: updatedRoom.creatorId });
+        }
       } catch (err) {
-        console.warn("move error:", err);
+        console.warn("move error:", err?.message || err);
         socket.emit("error", { message: err.message || "Move failed" });
       }
     });
 
-    /* ---------------------- reset ---------------------- */
     socket.on("reset", async (payload = {}) => {
       try {
         const roomId = String(payload.room || socketRoomMap.get(socket.id) || "default");
+        const room = await roomsController.getRoom(roomId);
+        if (!room) {
+          socket.emit("error", { message: "Room not found" });
+          return;
+        }
+        if (room.creatorId && room.creatorId !== socket.id) {
+          socket.emit("error", { message: "Only the room creator can start a new game" });
+          return;
+        }
         const updated = await roomsController.resetRoom(roomId);
-
         io.in(roomId).emit("board-update", { board: updated.board, xTurn: updated.xTurn });
+        io.in(roomId).emit("players-updated", { players: updated.players, scores: updated.scores, creatorId: updated.creatorId });
       } catch (err) {
         console.warn("reset error:", err);
         socket.emit("error", { message: err.message || "Reset failed" });
       }
     });
 
-    /* ---------------------- leave-room ---------------------- */
+    // Chat: persist server-side then emit
+    socket.on("chat-message", async (payload = {}) => {
+      const roomId = socketRoomMap.get(socket.id);
+      if (!roomId) return;
+
+      // Basic validation: ensure sender is a player in the room (prevents spamming other rooms)
+      const room = await roomsController.getRoom(roomId);
+      const isPlayer = room && room.players && Object.values(room.players).some((p) => p.socketId === socket.id);
+      if (!isPlayer) {
+        // ignore or reply with error
+        socket.emit("error", { message: "You are not a player in this room" });
+        return;
+      }
+
+      const msg = {
+        id: `${socket.id}-${Date.now()}`,
+        sender: payload.sender || "Anonymous",
+        text: payload.text || null,
+        mediaUrl: payload.mediaUrl || null,
+        createdAt: new Date(),
+      };
+
+      // persist
+      await roomsController.addMessage(roomId, msg);
+
+      // Emit to everyone else in room (so sender doesn't get a duplicate if they optimistically appended)
+      socket.to(roomId).emit("chat-message", msg);
+
+      // Send an ack to the sender (so client has a single canonical place to append outgoing message)
+      socket.emit("chat-message-ack", msg);
+    });
+
     socket.on("leave-room", async (payload = {}) => {
       try {
         const roomId = String(payload.room || socketRoomMap.get(socket.id));
         if (!roomId) return;
 
-        // Remove mapping and remove player from model
         socketRoomMap.delete(socket.id);
         socket.leave(roomId);
 
         const roomAfter = await roomsController.removePlayer(roomId, socket.id);
 
-        // Notify others
+        // Notify others and, if possible, send updated players list
         socket.to(roomId).emit("player-left", { id: socket.id });
-
-        // If roomAfter is null, room was cleaned up (no players)
-        if (!roomAfter) {
+        if (roomAfter) {
+          io.in(roomId).emit("players-updated", { players: roomAfter.players, scores: roomAfter.scores, creatorId: roomAfter.creatorId });
+        } else {
           console.log(`Room ${roomId} removed (empty)`);
         }
       } catch (err) {
@@ -109,17 +165,16 @@ function attachRoomSockets(io) {
       }
     });
 
-    /* ---------------------- disconnect ---------------------- */
     socket.on("disconnect", async (reason) => {
       try {
         const roomId = socketRoomMap.get(socket.id);
         socketRoomMap.delete(socket.id);
         if (roomId) {
-          // remove player and notify room
           const roomAfter = await roomsController.removePlayer(roomId, socket.id);
           socket.to(roomId).emit("player-left", { id: socket.id });
-
-          if (!roomAfter) {
+          if (roomAfter) {
+            io.in(roomId).emit("players-updated", { players: roomAfter.players, scores: roomAfter.scores, creatorId: roomAfter.creatorId });
+          } else {
             console.log(`Deleted empty room ${roomId} after socket disconnect ${socket.id}`);
           }
         }

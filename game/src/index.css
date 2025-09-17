@@ -36,7 +36,9 @@ body {
   background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
   border: 1px solid var(--card-border);
   backdrop-filter: blur(6px);
-  overflow: visible;
+  overflow: visible;        /* allow rings to be visible */
+  padding: 16px;            /* keep a modest padding */
+  display: block;
 }
 
 /* Muted text */

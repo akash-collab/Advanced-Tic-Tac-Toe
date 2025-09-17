@@ -31,12 +31,14 @@ export default function GameCell({ value, onClick, index, isHighlighted, cellPx 
         "bg-transparent border rounded-lg",
         "border-transparent hover:border-white/6",
         "focus:outline-none",
-        isHighlighted ? "ring-4 ring-rose-400 transform-gpu" : "hover:scale-[1.01] transition-transform"
+        isHighlighted ? "ring-2 ring-rose-400 transform-gpu" : "hover:scale-[1.01] transition-transform"
       )}
       style={{
         width: cellPx ? `${cellPx}px` : "100%",
         height: cellPx ? `${cellPx}px` : "100%",
         boxSizing: "border-box",
+        borderWidth: "1px",
+        borderStyle: "solid",
         // subtle cell background so grid looks consistent
         background: "linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005))",
         borderColor: "rgba(255,255,255,0.04)",

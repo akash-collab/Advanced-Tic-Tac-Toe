@@ -108,7 +108,6 @@ export default function SecretRose({ onClose, roomId }) {
     }
     if (!text && !mediaUrl) return;
 
-    // The server will persist and send ack to sender and broadcast to others.
     const payload = { sender: user?.name || "You", text: text || null, mediaUrl: mediaUrl || null };
     socketRef.current.emit("chat-message", payload);
     setInput("");

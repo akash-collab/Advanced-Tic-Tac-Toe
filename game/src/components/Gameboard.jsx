@@ -387,23 +387,31 @@ export default function GameBoard() {
     return playerNames[symbol] || null;
   };
 
-  // dynamic board container style + precise cell size
-  const gapPx = 12;
+  const isSmall = typeof window !== "undefined" && window.innerWidth <= 420;
+  const gapPx = isSmall ? 8 : 12; const borderPx = 2; // total border (1px each side) used in cells
+  const ringExtra = 6; // extra visual for ring/highlight, we'll allow a small inset
 
   // compute cellPx when boardPx is available
-  const cellPx = boardPx ? Math.floor((boardPx - gapPx * (size - 1)) / size) : null;
+  // subtract border widths and a small allowance so ring doesn't overflow
+  const cellPx = boardPx
+    ? Math.floor((boardPx - gapPx * (size - 1) - borderPx * size - Math.ceil(ringExtra / 2)) / size)
+    : null;
+
+  const boardInnerWidth = cellPx ? cellPx * size + gapPx * (size - 1) + borderPx * size : null;
 
   const boardContainerStyle = boardPx
     ? {
       // fix board outer dimension to boardPx (cells will be exact)
-      width: `${boardPx}px`,
+      width: `${boardInnerWidth}px`,
       margin: "0 auto",
       display: "grid",
       gridTemplateColumns: `repeat(${size}, ${cellPx}px)`,
       gridAutoRows: `${cellPx}px`,
       gap: `${gapPx}px`,
       justifyContent: "center",
+      alignItems: "center",
       boxSizing: "border-box",
+      padding: 0, // keep paddings out of width calculation
     }
     : {
       display: "grid",

@@ -16,7 +16,7 @@ import clsx from "clsx";
 
 export default function GameCell({ value, onClick, index, isHighlighted, cellPx }) {
   // responsive font sizing: scale with cellPx when provided
-  const fontSize = cellPx ? Math.max(20, Math.floor(cellPx * 0.35)) : undefined;
+  const fontSize = cellPx ? Math.max(20, Math.floor(cellPx * 0.45)) : undefined;
 
   return (
     <motion.button

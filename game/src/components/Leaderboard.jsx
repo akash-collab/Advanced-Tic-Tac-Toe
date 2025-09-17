@@ -17,7 +17,7 @@ export default function Leaderboard({ players = [], scores = { X: 0, O: 0 }, hig
   };
 
   return (
-    <div className="bg-card p-3 rounded-xl shadow-soft w-full max-w-sm">
+    <div className="bg-card p-3 rounded-xl shadow-soft w-full">
       <div className="text-sm text-muted mb-2">Leaderboard</div>
       <div className="flex flex-col gap-2">
         {["X", "O"].map((s) => (

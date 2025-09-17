@@ -48,7 +48,6 @@ export default function Controls({
   // When user tries to toggle multiplayer on while not logged in, show an alert
   function handleToggleMultiplayer(checked) {
     if (checked && !loggedIn) {
-      // polite UX: quick alert — you can replace with a nicer toast
       alert("You must be logged in to use Online Mode.");
       return;
     }
@@ -75,7 +74,7 @@ export default function Controls({
             max="10"
             value={size}
             onChange={(e) => setSize(Number(e.target.value))}
-            className="w-44"
+            className="w-full sm:w-44"
           />
         </div>
 
@@ -91,7 +90,7 @@ export default function Controls({
             max={size}
             value={winLen}
             onChange={(e) => setWinLen(Number(e.target.value))}
-            className="w-44"
+            className="w-full sm:w-44"
           />
         </div>
       </motion.div>
@@ -102,7 +101,7 @@ export default function Controls({
         transition={{ duration: 0.36 }}
         className="flex gap-2 justify-end items-center"
       >
-        <div className="text-sm text-muted mr-2 hidden sm:block">{statusMsg}</div>
+        <div className="text-sm text-muted mr-2">{statusMsg}</div>
 
         <button
           onClick={newGame}

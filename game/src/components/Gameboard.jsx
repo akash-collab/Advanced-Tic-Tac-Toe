@@ -466,8 +466,7 @@ export default function GameBoard() {
             />
           </div>
 
-          <section className="bg-card p-4 rounded-2xl shadow-soft" aria-live="polite">
-            {/* Board: precise pixel grid to avoid overlap */}
+          <section className="bg-card p-2 sm:p-4 rounded-2xl shadow-soft" aria-live="polite">
             <div style={boardContainerStyle}>
               {board.map((val, i) => (
                 <GameCell

@@ -109,23 +109,6 @@ const handleKeySubmit = (e) => {
                 </button>
               </>
             )}
-
-            {/* secret key */}
-            <form onSubmit={handleKeySubmit} className="flex gap-2">
-              <input
-                type="password"
-                placeholder="Enter key..."
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                className="px-2 py-1 rounded-lg border border-transparent bg-transparent text-sm text-muted placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-rose-400"
-              />
-              <button
-                type="submit"
-                className="px-3 py-1 btn-primary rounded-lg text-sm"
-              >
-                Unlock
-              </button>
-            </form>
           </div>
         </div>
       </header>
